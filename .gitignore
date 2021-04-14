@@ -1,0 +1,12 @@
+# Python cache
+__pycache__/
+# JetBrains
+.idea/
+# macOS temporary files
+.DS_Store
+._*
+# Script config
+config.json
+# Lists
+*.txt
+!requirements.txt
