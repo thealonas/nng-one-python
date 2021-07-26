@@ -1,20 +1,46 @@
 # -*- coding: utf-8 -*-
+import typing
 import traceback
-from typing import Union
 from sentry_sdk import capture_exception
 from framework.core import NNGCore
 from framework.functions import Category
 from framework.functions import Function
 from framework.saves import NNGSaves
-from logger import Logger as lg
-from other.exceptions import ReturnBack
+from framework.update import NNGUpdate
+from utils.logger import Logger as lg
 from other.cmd_helper import CMDHelper
+from other.exceptions import ReturnBack
 
 
 class NNGUtils:
-    framework = None
     name = "NNG One"
     helper = CMDHelper()
+
+    def __init__(self):
+        self.saves = NNGSaves()
+        self.update = NNGUpdate()
+        self.core = NNGCore(self.saves.token)
+        self.messages = [
+            {
+                "message": "Отчёты об ошибках отключены. К сожалению мы не сможем их исправить в случае возникновения",
+                "type": 2,
+            }
+            if not self.saves.sentry
+            else None,
+            {"message": self.core.msg, "type": 4},
+            {
+                "message": f"Ваша версия ({self.update.version}) устарела. "
+                f"Требуется обновление до {self.update.new_version}",
+                "type": 2,
+            }
+            if self.update.if_update_need()
+            else {
+                "message": "Текущая версия NNG One не нуждается в обновлении",
+                "type": 1,
+            },
+        ]
+        self.core.set_messages(self.messages)
+        lg.clear()
 
     @staticmethod
     def init():
@@ -43,108 +69,112 @@ class NNGUtils:
 
         return categories, functions
 
-    def get_choose(
-        self, promt: str, maxValue: int, rng: list[int], is_category_choose: bool = True
-    ):
-        lg.log(self.name, "Выберете пункт меню:\n\n", 1)
-        print(promt) if is_category_choose else print(
-            f"{promt}{maxValue + 1}. Вернуться назад\n\n"
-        )
-        choose = str(input(">"))
-        # Учитываем вернуться назад как пункт меню, он всегда на один больше максимального значения
-        rng[1] += 1
-
-        if not choose.isdigit():
-            lg.clear()
-            lg.log(self.name, "Неверный пункт меню!", 2)
-            return self.get_choose(promt, maxValue, rng, is_category_choose)
-        choose = int(choose)
-        if maxValue + 1 == choose:
-            return False
-        if 0 < choose <= maxValue:
-            return choose
+    def menu(self, category: int = None) -> Function:
         lg.clear()
-        lg.log(self.name, "Неверный пункт меню!", 2)
-        return self.get_choose(promt, maxValue, rng, is_category_choose)
 
-    @staticmethod
-    def wait_for_reply():
-        input("Для продолжения нажмите ENTER...\n")
+        def get_string_value_for_functions(
+            funcs: typing.List[Function],
+        ) -> str:
 
-    def menu(self, messages: list[dict[str, int]], category: int = None) -> Function:
-        lg.clear()
-        for msg in messages:
-            try:
-                msg["message"]
-                msg["type"]
-            except (TypeError, KeyError):
-                continue
-            lg.log(self.name, msg["message"], msg["type"])
-        cats, funcs = self.init()
-        category_txt = function_txt = str()
-        functions = str()
-        for cat in cats:
-            category_txt += f"{cat.cid}. {cat.name}\n\n"
-        choose = (
-            category
-            if category is not None
-            else self.get_choose(
-                category_txt, rng=[1, cats[-1].cid], maxValue=cats[-1].cid
-            )
+            int_value = -1
+            txt = str()
+
+            # Цикл определяет номер функции для выхода из меню и текст
+            for func in funcs:
+                txt += f"{func.fid}. {func.name}\n\n"
+                if int_value < func.fid:
+                    int_value = func.fid
+
+            return txt
+
+        def get_string_value_for_categories(categories: typing.List[Category]) -> str:
+            txt = str()
+
+            # Цикл определяет текст
+            for func_category in categories:
+                txt += f"{func_category.cid}. {func_category.name}\n\n"
+
+            return txt
+
+        def get_category_list_range(
+            element: typing.List[Category],
+        ) -> typing.List[int]:
+            return [1, element[-1].cid]
+
+        menu_categories, menu_functions = self.init()
+
+        # Работа с категориями
+
+        category_txt = get_string_value_for_categories(menu_categories)
+
+        rng = get_category_list_range(menu_categories)
+
+        choose = category or self.helper.get_title_choose(
+            category_txt,
+            rng=rng,
+            maxValue=menu_categories[-1].cid,
+            messages=self.messages,
+            do_not_show_exit=True,
         )
+
         if not choose:
-            self.menu(messages)
+            return self.menu()
+
+        # Работа с функциями
+
         try:
-            functions = funcs[choose - 1]
+            functions = menu_functions[choose - 1]
         except IndexError:
-            lg().log("NNG One", "Число не может быть равным или меньше нуля", 3)
-            lg.clear()
-            self.menu(messages)
-        exitValue = -1
-        for func in functions:
-            function_txt += f"{func.fid}. {func.name}\n\n"
-            if exitValue < func.fid:
-                exitValue = func.fid
-        exitValue += 1
+            lg.log("Число не может быть равным или меньше нуля", lg.level.warn)
+            return self.menu()
+
+        function_txt = get_string_value_for_functions(functions)
         lg.clear()
-        choose = self.get_choose(
+
+        choose = self.helper.get_title_choose(
             function_txt,
-            rng=[1, functions[-1].fid],
             maxValue=functions[-1].fid,
-            is_category_choose=False,
+            rng=[1, functions[-1].fid],
+            do_not_show_exit=False,
+            messages=self.messages,
         )
+
         if choose:
             function = functions[choose - 1]
             return function
-        function = self.menu(messages)
+
+        function = self.menu()
         return function
 
-    def main(self, sentry: bool = True, function: Function = None):
-        saves = NNGSaves()
-        token = saves.load()
-        lg.clear()
-        while type(token) is not dict:
-            lg.log(self.name, "Данные о токене повреждены", 3)
-            saves.dialog(first=True)
-            self.main()
-        token = token["token"]
-        core = NNGCore(token)
-        if not core.is_authorized():
-            lg.log(self.name, "Данные о токене повреждены", 3)
-            saves.token_upd()
-            self.main()
-        messages = [
+    def main(self, function: Function = None):
+        saves = self.saves
+        self.core = NNGCore(saves.token)
+        core = self.core
+        self.messages = [
             {
-                "message": "Отчёты об ошибках отключены. К сожалению мы не сможем их справить в случае возникновения",
-                "type": 2,
+                "message": "Отчёты об ошибках отключены. К сожалению мы не сможем их исправить в случае возникновения",
+                "type": lg.level.warn,
             }
-            if not sentry
+            if not self.saves.sentry
             else None,
-            {"message": core.msg, "type": 1},
+            {"message": self.core.msg, "type": lg.level.tagged_success},
+            {
+                "message": f"Ваша версия ({self.update.version}) устарела. "
+                f"Требуется обновление до {self.update.new_version}",
+                "type": lg.level.warn,
+            }
+            if self.update.if_update_need()
+            else None,
         ]
+        self.core.set_messages(self.messages)
+        lg.clear()
+        if not core.is_authorized():
+            lg.log("Необходимо обновить токен", lg.level.error, self.name, force=True)
+            saves.update_token()
+            self.main()
         try:
             cid = function.cid if function is not None else None
-            function = self.menu(messages=messages, category=cid)
+            function = self.menu(category=cid)
             if function.cid == 1:
                 core.block(function)
             elif function.cid == 2:
@@ -158,20 +188,31 @@ class NNGUtils:
         except ReturnBack as back:
             lg.clear()
             self.main(function=back.function)
-        except (ValueError, KeyError) as e:
-            lg.log(self.name, f"Произошла ошибка: {e}", 3)
-            lg.log(self.name, "Похоже, что данные в конфиге некорректны", 2)
-            if self.helper.get_yn_choose("Хотите ли заполнить конфиг повторно?"):
+        except (
+            FileNotFoundError,
+            OSError,
+            saves.Exceptions.BadData,
+            saves.Exceptions.BadUrl,
+        ) as e:
+            if e is not None and len(str(e)) > 0:
+                lg.log(f"Произошла ошибка: {e}", lg.level.debug, self.name)
+            lg.log(
+                "Похоже, что данные в конфиге некорректны",
+                lg.level.warn,
+                self.name,
+                force=True,
+            )
+            if self.helper.get_yn_choose("Хотите ли Вы заполнить конфиг повторно?"):
                 saves.dialog(first=True)
         except Exception as e:
             string = traceback.format_exc()
-            load = saves.load()
-            event = capture_exception(e) if load["sentry"] else str()
-            message = f"Ваш event_id: {event}" if load["sentry"] else str()
+            event = capture_exception(e) if saves.sentry else str()
+            message = f"Ваш event_id: {event}" if saves.sentry else str()
             lg.log(
-                "NNG One",
-                f"Упс! Похоже Вы нашли баг. Отправьте нам его в гитхаб, приложив текст ниже{' и Ваш event_id.' if load['sentry'] else '.'}\n{message}",
-                3,
+                f"Упс! Похоже Вы нашли баг. Отправьте нам его в гитхаб, "
+                f"приложив текст ниже{' и Ваш event_id' if saves.sentry else ''}\n{message}",
+                lg.level.error,
+                force=True,
             )
             print(string)
-            self.wait_for_reply()
+            self.helper.idle()

@@ -1,48 +1,48 @@
 # -*- coding: utf-8 -*-
 import vk_api
+import typing
 import webbrowser
 import urllib.request
 import colorful as cf
 from time import sleep
 from typing import Union
-from logger import Logger as lg
+from urllib.error import HTTPError
 from framework.saves import NNGSaves
-from other.cmd_helper import CMDHelper
+from utils.logger import Logger as lg
 
 
 class NNGFramework:
     name = "NNG Framework"
     exception_tuple = (
-        vk_api.ApiError,
-        vk_api.VkApiError,
-        vk_api.ApiHttpError,
-        vk_api.AuthError,
-        vk_api.TwoFactorError,
         vk_api.exceptions.Captcha,
         vk_api.exceptions.ApiError,
         vk_api.exceptions.VkApiError,
         vk_api.exceptions.ApiHttpError,
         vk_api.exceptions.AuthError,
         vk_api.exceptions.TwoFactorError,
+        TypeError,
     )
+
+    class Exceptions:
+        class BadLists(Exception):
+            pass
 
     def __init__(self, token):
         self.vk = self.auth_msg = None
-        self.auth = self.auth(token)
+        self.auth(token)
         self.debug = False
+        self.saves = NNGSaves()
 
     def auth(self, token) -> bool:
         try:
             token = vk_api.VkApi(token=token)
             self.vk = token.get_api()
             name = self.vk.account.getProfileInfo()
-            surname = name.get("last_name")
             userid = name.get("id")
             name = name.get("first_name")
-            self.auth_msg = f"[Auth] Авторизован по токену | Добро пожаловать, {name} {surname} | ID: {userid}"
+            self.auth_msg = f"Добро пожаловать, {name} | Ваш ID: {userid}"
             return True
-        except self.exception_tuple as Error:
-            lg().log(self.name, "[Auth] Ошибка авторизации: {}".format(Error), 3)
+        except self.exception_tuple:
             self.vk = None
             return False
 
@@ -64,18 +64,28 @@ class NNGFramework:
                     ids.append(query["id"])
                 return ids
             return False
-        except vk_api.exceptions.Captcha as captcha:
-            self.captcha_handler(captcha)
+        except vk_api.exceptions.Captcha:
+            sleep(5)
+            return self.get_user_ids(user=user, users=users)
         except self.exception_tuple as Error:
-            lg().log(self.name, "Неизвестная ошибка! {0}".format(Error), 3)
+            lg().log("Неизвестная ошибка! {0}".format(Error), 3, self.name)
+            return False
+
+    def get_user_by_id(self, name: Union[str, int]):
+        try:
+            user = self.vk.users.get(user_ids=name)
+            return int(user[0]["id"])
+        except Exception as Error:
+            lg.log(f"Произошла ошибка: {Error}", tp=lg.level.error, name=self.name)
             return False
 
     def get_community_by_id(self, name: Union[str, int]):
         try:
             group = self.vk.groups.getById(group_id=name)
-            return group[0]["id"]
-        except self.exception_tuple as Error:
-            lg.log(self.name, f"Неизвестная ошибка: {Error}", 3)
+            return int(group[0]["id"])
+        except Exception as Error:
+            lg.log(f"Произошла ошибка: {Error}", tp=lg.level.error, name=self.name)
+            return False
 
     def captcha_handler(self, captcha):
         webbrowser.open_new(captcha.get_url())
@@ -85,61 +95,61 @@ class NNGFramework:
             )
         )
         try:
-            captcha.try_again(key)
-        except vk_api.exceptions.Captcha as captcha:
+            return captcha.try_again(key)
+        except vk_api.exceptions.Captcha as capt:
             lg.log(
-                self.name,
-                "[Captcha Handler] Неправильный ввод каптчи! Попробуйте снова.",
+                "[Captcha Handler] Неверный код каптчи! Попробуйте снова.",
                 3,
+                self.name,
             )
-            self.captcha_handler(captcha)
+            self.captcha_handler(capt)
 
-    def unarchive_banlist(self, debug: bool = False):
-        saves = NNGSaves().load()
-        rtype = saves["lists"]["loadtype"]
-        banlist = saves["lists"]["banlist"]
+    def __unpack(self, rtype: int, url: str) -> [typing.List[str], None]:
+        try:
+            if rtype == 0:
+                return urllib.request.urlopen(url).read().decode().split(",")
+            if rtype == 1:
+                with open(url, "r") as f:
+                    return f.read().split(",")
+        except (FileNotFoundError, HTTPError) as e:
+            lg.log(f"Произошла ошибка: {e}", lg.level.debug)
+            raise self.Exceptions.BadLists
+        return None
+
+    def __int_list(self, element: typing.List[str]) -> typing.List[int]:
+        result = []
+        for _, item in enumerate(element):
+            try:
+                result.append(int(item))
+            except ValueError:
+                lg.log(
+                    f"Невозможно преобразовать {item} в число!",
+                    lg.level.error,
+                    force=True,
+                )
+                raise self.Exceptions.BadLists
+        return result
+
+    def unpack_ban_list(self):
+        rtype = self.saves.load_type
+        ban_list = self.saves.ban_list
         urllib.request.urlcleanup()
         try:
-            if rtype == "0":
-                objects = urllib.request.urlopen(banlist).read().decode().split(",")
-                for index in range(len(objects)):
-                    objects[index] = int(objects[index])
-                if debug:
-                    print(objects)
-                    print(type(objects[0]))
-                return objects
-            if rtype == "1":
-                with open(banlist, "r") as f:
-                    objects = f.read().split(",")
-                for index in range(len(objects)):
-                    objects[index] = int(objects[index])
-                if debug:
-                    print(objects)
-                    print(type(objects[0]))
-                return objects
-        except self.exception_tuple as Error:
-            lg.log(self.name, f"Произошла ошибка: {Error}", 3)
-            return False
+            unpacked = self.__unpack(rtype, ban_list)
+            return self.__int_list(unpacked)
+        except self.Exceptions.BadLists:
+            lg.log("Невозможно распаковать списки!", tp=lg.level.error, name=self.name)
+            raise NNGSaves.Exceptions.BadData
 
-    def unarchive_groups(self):
-        saves = NNGSaves().load()
-        rtype = saves["lists"]["loadtype"]
-        group_list = saves["lists"]["grouplist"]
+    def unpack_group_list(self):
+        rtype = self.saves.load_type
+        group_list = self.saves.group_list
         try:
-            objects = []
-            if rtype == "0":
-                objects = urllib.request.urlopen(group_list).read().decode().split(",")
-            if rtype == "1":
-                with open(group_list, "r") as f:
-                    objects = f.read().split(",")
-            for index in range(len(objects)):
-                objects[index] = int(objects[index])
-            return objects
-        except self.exception_tuple as Error:
-            lg.log(self.name, f"Неизвестная ошибка: {Error}", 3)
-            return False
-
-    # [-- Group management --]
+            unpacked = self.__unpack(rtype, group_list)
+            return self.__int_list(unpacked)
+        except self.Exceptions.BadLists:
+            lg.log("Невозможно распаковать списки!", tp=lg.level.error, name=self.name)
+            raise NNGSaves.Exceptions.BadData
 
     def if_user_is_community_editor(self, group: int) -> bool:
         try:
@@ -153,39 +163,165 @@ class NNGFramework:
         except self.exception_tuple:
             return False
 
-    def if_user_is_community_admin(self, group: int) -> bool:
-        try:
-            managers = self.get_all_community_members(group=group, managers=True)
-            if managers is None:
-                return False
-            return True
-        except vk_api.exceptions.Captcha:
-            sleep(10)
-            return self.if_user_is_community_admin(group)
-        except self.exception_tuple:
-            return False
-
     def delete_community_post(self, group: int, post: int) -> bool:
         try:
             self.vk.wall.delete(owner_id=-group, post_id=post)
             return True
         except self.exception_tuple as Error:
-            lg.log(self.name, f"Неизвестная ошибка: {Error}", 3)
+            lg.log(f"Произошла ошибка: {Error}", tp=lg.level.error, name=self.name)
             return False
 
-    def get_community_posts(self, group: int) -> list[int]:
-        posts = self.vk.wall.get(owner_id=-group)["items"]
-        for index in range(len(posts)):
-            posts[index] = posts[index]["id"]
-        return posts
+    def get_community_posts(self, group: int) -> typing.Union[typing.List[int], None]:
+        try:
+            posts_count = int(self.vk.wall.get(owner_id=-group, count=1)["count"])
+            count = 1 if posts_count < 100 else (posts_count // 100) + 1
+            posts = []
+            for index in range(count):
+                to_add = []
+                post = self.vk.wall.get(
+                    owner_id=-group, count=100, offset=index * 100, extended=False
+                )["items"]
+                for item in post:
+                    if int(item["id"]) > 0:
+                        to_add.append(item["id"])
+                if len(to_add) > 0:
+                    posts.append(to_add)
+            posts = self.__remove_included_list(posts)
+            output = []
+            for _, element in enumerate(posts):
+                try:
+                    output.append(int(element))
+                except ValueError:
+                    continue
+            return output
+        except vk_api.exceptions.Captcha:
+            sleep(10)
+            return self.get_community_posts(group)
+        except self.exception_tuple as Error:
+            lg.log(f"Произошла ошибка: {Error}", tp=lg.level.error, name=self.name)
+            return None
+
+    def get_community_callback_servers(
+        self, group: int, callback_bot_only: bool = True
+    ):
+        try:
+            servers = self.vk.groups.getCallbackServers(group_id=group)
+            servers = servers["items"]
+            result = []
+            for server, element in enumerate(servers):
+                if "cbbot.ifx.su" not in element["url"] and callback_bot_only:
+                    lg.log(
+                        f"Пропуск сервера с ID: {element['id']}",
+                        lg.level.debug,
+                    )
+                    continue
+                result.append(servers[server]["id"])
+            return result
+        except self.exception_tuple as Error:
+            lg.log(f"Произошла ошибка: {Error}", tp=lg.level.error, name=self.name)
+            return None
+
+    def assure_community_ownership(self, group: int) -> bool:
+        try:
+            result = self.get_community_callback_servers(group=group)
+            if result is None:
+                return False
+            return True
+        except self.exception_tuple:
+            return False
 
     def change_community_wall_state(self, group: int, state: bool):
         try:
             self.vk.groups.edit(group_id=group, wall=2 if state else 0)
+            lg.log(
+                f"Изменили статус стены у группы {group} на {state}",
+                tp=lg.level.debug,
+                name=self.name,
+            )
         except vk_api.exceptions.Captcha as capt:
             self.captcha_handler(capt)
         except self.exception_tuple as Error:
-            lg.log(self.name, f"Неизвестная ошибка: {Error}", 3)
+            lg.log(f"Произошла ошибка: {Error}", tp=lg.level.error, name=self.name)
+
+    def change_community_callback_editor_state(
+        self, group: int, server: int, state: int
+    ):
+        try:
+            self.vk.groups.setCallbackSettings(
+                group_id=group, server_id=server, group_officers_edit=state
+            )
+        except vk_api.exceptions.Captcha as capt:
+            self.captcha_handler(capt)
+        except self.exception_tuple as Error:
+            lg.log(f"Произошла ошибка: {Error}", tp=lg.level.error, name=self.name)
+        else:
+            lg.log(
+                f"Поменяли Callback у {group} на {state}, сервер: {server}",
+                lg.level.debug,
+            )
+
+    def change_community_callback_banned_state(
+        self, group: int, server: int, state: int
+    ):
+        try:
+            self.vk.groups.setCallbackSettings(
+                group_id=group, server_id=server, user_block=state, group_leave=state
+            )
+        except vk_api.exceptions.Captcha as capt:
+            self.captcha_handler(capt)
+        except self.exception_tuple as Error:
+            lg.log(f"Произошла ошибка: {Error}", tp=lg.level.error, name=self.name)
+        else:
+            lg.log(
+                f"Поменяли Callback у {group} на {state}, сервер: {server}",
+                lg.level.debug,
+            )
+
+    def change_community_callback_unbanned_state(
+        self, group: int, server: int, state: int
+    ):
+        try:
+            self.vk.groups.setCallbackSettings(
+                group_id=group, server_id=server, user_unblock=state
+            )
+        except vk_api.exceptions.Captcha as capt:
+            self.captcha_handler(capt)
+        except self.exception_tuple as Error:
+            lg.log(f"Произошла ошибка: {Error}", tp=lg.level.error, name=self.name)
+        else:
+            lg.log(
+                f"Поменяли Callback у {group} на {state}, сервер: {server}",
+                lg.level.debug,
+            )
+
+    def change_community_callback_wall_states(
+        self, group: int, server: int, state: int
+    ):
+        try:
+            self.vk.groups.setCallbackSettings(
+                group_id=group,
+                server_id=server,
+                wall_post_new=state,
+                wall_repost=state,
+                group_change_settings=state,
+            )
+        except vk_api.exceptions.Captcha as capt:
+            self.captcha_handler(capt)
+        except self.exception_tuple as Error:
+            lg.log(f"Произошла ошибка: {Error}", tp=lg.level.error, name=self.name)
+        else:
+            lg.log(
+                f"Поменяли Callback у {group} на {state}, сервер: {server}",
+                lg.level.debug,
+            )
+
+    @staticmethod
+    def __remove_included_list(array: typing.List[list]) -> typing.List:
+        ids = []
+        for index, _ in enumerate(array):
+            for second_index, _ in enumerate(array[index]):
+                ids.append(array[index][second_index])
+        return ids
 
     def get_banned_members(self, group: int):
         banned_users = []
@@ -197,21 +333,21 @@ class NNGFramework:
                     group_id=group, count=200, offset=index * 200
                 )["items"]
                 banned_users.append(items)
-            ids = []
-            for index in range(len(banned_users)):
-                for second_index in range(len(banned_users[index])):
-                    ids.append(banned_users[index][second_index])
+            ids = self.__remove_included_list(banned_users)
             banned_users = ids
-            for index in range(len(banned_users)):
+            for index, _ in enumerate(banned_users):
                 banned_users[index] = banned_users[index]["profile"]["id"]
+        except vk_api.exceptions.Captcha:
+            sleep(10)
+            return self.get_banned_members(group)
         except self.exception_tuple as Error:
-            lg.log(self.name, f"Неизвестная ошибка: {Error}", 3)
+            lg.log(f"Произошла ошибка: {Error}", tp=lg.level.error, name=self.name)
             return None
         return banned_users
 
     def get_all_community_members(
         self, group: int, managers: bool = False, with_banned: bool = True
-    ) -> list[int]:
+    ):
         members = []
         try:
             count = self.vk.groups.getMembers(
@@ -241,85 +377,67 @@ class NNGFramework:
                 ids.append(profile["id"])
             return ids
         except self.exception_tuple as Error:
-            lg.log(self.name, f"Неизвестная ошибка: {Error}", 3)
+            lg.log(f"Произошла ошибка: {Error}", tp=lg.level.error, name=self.name)
             return None
 
-    def repost(self, group: int, message: str):
+    def repost(self, group: int, message: str) -> bool:
         try:
-            self.vk.wall.repost(group_id=group, object=message)
+            result = self.vk.wall.repost(group_id=group, object=message)
+            if "success" in result and result["success"] == 1:
+                return True
+            return False
         except vk_api.exceptions.Captcha as capt:
             self.captcha_handler(capt)
+            return True
         except self.exception_tuple as Error:
-            lg.log(self.name, f"Неизвестная ошибка: {Error}", 3)
+            lg.log(f"Произошла ошибка: {Error}", tp=lg.level.error, name=self.name)
+            return False
 
-    def block_with_exception(
-        self, group: int, banlist: list[int], com: str, captcha: bool = True
+    def block(
+        self, group: int, ban_list: typing.List[int], com: str, debug: bool = False
     ):
         banned_users = self.get_banned_members(group)
-        banlist = [i for i in banlist if i not in banned_users]
+        ban_list = [i for i in ban_list if i not in banned_users]
         counter = 0
-        while counter < len(banlist):
-            user = banlist[counter]
+        while counter < len(ban_list):
+            user = ban_list[counter]
             response = 0
             try:
                 response = self.vk.groups.ban(
-                    group_id=group, owner_id=user, comment=com, comment_visible=1
+                    group_id=group,
+                    owner_id=user,
+                    comment=com if len(com) > 1 else None,
+                    comment_visible=1,
                 )
             except vk_api.exceptions.Captcha as capt:
-                if captcha:
+                if self.saves.captcha_ban:
                     try:
                         self.captcha_handler(capt)
                     except self.exception_tuple:
                         pass
+                    response = 1
                 else:
-                    lg.log(self.name, "Пауза на 15 секунд", 2)
+                    lg.log("Пауза на 35 секунд", lg.level.debug, self.name)
+                    response = -1
                     counter -= 1
-                    sleep(15)
+                    sleep(35)
             except self.exception_tuple as Error:
-                lg.log(self.name, f"Неизвестная ошибка: {Error}", 3)
+                lg.log(f"Произошла ошибка: {Error}", tp=lg.level.error, name=self.name)
             if response == 1:
                 lg.log(
-                    self.name, f"ID {user} добавлен в черный список сообщества {group}"
+                    f"ID {user} добавлен в чёрный список сообщества {group}",
+                    tp=lg.level.debug if debug else lg.level.success,
+                    name=self.name,
                 )
-            else:
+            elif response != -1:
                 lg.log(
+                    f"ID {user} не добавлен в чёрный список сообщества {group}",
+                    lg.level.warn,
                     self.name,
-                    f"ID {user} не добавлен в черный список сообщества {group}",
-                    2,
                 )
             counter += 1
 
-    def block(self, group: int, banlist: list[int], com: str, captcha: bool = True):
-        counter = 0
-        while counter < len(banlist):
-            user = banlist[counter]
-            response = 0
-            try:
-                response = self.vk.groups.ban(
-                    group_id=group, owner_id=user, comment=com, comment_visible=1
-                )
-            except vk_api.exceptions.Captcha as capt:
-                if captcha:
-                    self.captcha_handler(capt)
-                else:
-                    lg.log(self.name, "Пауза на 15 секунд", 2)
-                    counter -= 1
-                    sleep(15)
-            except self.exception_tuple as Error:
-                lg.log(self.name, f"Неизвестная ошибка: {Error}", 3)
-            if response == 1:
-                lg.log(
-                    self.name, f"ID {user} добавлен в черный список сообщества {group}"
-                )
-            else:
-                lg.log(
-                    self.name,
-                    f"ID {user} не добавлен в черный список сообщества {group}",
-                    2,
-                )
-            counter += 1
-
-    def unblock(self, group: int, ban_list: list[int], captcha: bool = True):
+    def unblock(self, group: int, ban_list: typing.List[int], captcha: bool = True):
         for user in ban_list:
             response = 0
             try:
@@ -328,30 +446,45 @@ class NNGFramework:
                 if captcha:
                     self.captcha_handler(capt)
                 else:
-                    lg.log(self.name, "Пауза на 15 секунд", 2)
+                    lg.log("Пауза на 15 секунд", 5, self.name)
                     sleep(15)
+                response = -1
             except self.exception_tuple as Error:
-                lg.log(self.name, f"Неизвестная ошибка: {Error}", 3)
+                lg.log(f"Произошла ошибка: {Error}", tp=lg.level.error, name=self.name)
             if response == 1:
                 lg.log(
-                    self.name, f"ID {user} убран из черного списка сообщества {group}"
+                    f"ID {user} убран из чёрного списка сообщества {group}",
+                    name=self.name,
                 )
-            else:
+            elif response != -1:
                 lg.log(
-                    self.name,
-                    f"Не удалось убрать ID {user} из черного списка сообщества {group}",
+                    f"Не удалось убрать ID {user} из чёрного списка сообщества {group}",
                     2,
+                    self.name,
                 )
 
     def editor(
-        self, group: int, users: list[int], limit: int = 100, clear: bool = False
+        self,
+        group: int,
+        users: typing.List[int],
+        limit: int = 100,
+        clear: bool = False,
+        debug: bool = False,
     ):
         task_sleep = 7200
-        captcha_count = managers_count = 0
-        helper = CMDHelper()
-        is_sleeping = passing_manager = False
-        counter = 0
-        while counter < len(users):
+        counter = managers_count = 0
+        if limit == 0:
+            return
+        while True:
+            if counter >= len(users):
+                return
+            if managers_count >= limit:
+                lg.log(
+                    f"Достигнут лимит руководителей ({limit})",
+                    lg.level.debug,
+                    name=self.name,
+                )
+                return
             response = 0
             user = users[counter]
             try:
@@ -362,49 +495,33 @@ class NNGFramework:
                     is_contact=0,
                 )
             except vk_api.exceptions.Captcha as capt:
-                captcha_count += 1
-                response = 1
-                if captcha_count == 1:
-                    lg.log(
-                        self.name, "Похоже, что ВКонтакте начал запрашивать каптчу", 2
-                    )
-                    ask = "1. Подождать\n\n2. Продолжить ввод капчи\n\n3. Остановить выдачу"
-                    choose = helper.get_choose(ask, 3)
-                    if choose == 1:
-                        is_sleeping = True
-                    elif choose == 2:
-                        is_sleeping = False
-                    else:
-                        lg.log(self.name, "Выходим из операции")
-                        break
-                if is_sleeping:
-                    lg.log(self.name, f"Пауза на {task_sleep} секунд")
+                if not self.saves.captcha_editor:
+                    lg.log(f"Пауза на {task_sleep} секунд", name=self.name)
                     counter -= 1
+                    response = -1
                     sleep(task_sleep)
                 else:
                     self.captcha_handler(capt)
-                    passing_manager = True
-                    counter -= 1
+                    response = -1
             except self.exception_tuple as Error:
-                lg.log(self.name, f"Неизвестная ошибка: {Error}", 3)
-            if response == 1 and not passing_manager:
+                lg.log(f"Произошла ошибка: {Error}", tp=lg.level.error, name=self.name)
+            if response == 1:
                 lg.log(
-                    self.name,
-                    f"ID {user} {'убран из менеджеров' if clear else 'добавлен в редакторы'} сообщества {group}",
+                    f"ID {user} {'убран из руководителей' if clear else 'добавлен в руководители'} сообщества {group}",
+                    name=self.name,
+                    tp=lg.level.debug if debug else lg.level.success,
                 )
                 managers_count += 1
-            elif not passing_manager:
+            elif response != -1:
                 lg.log(
-                    self.name,
-                    f"ID {user} не удалось {'убрать из менеджеров' if clear else 'добавить в редакторы'} сообщества {group}",
-                    2,
+                    f"Не удалось {'убрать из руководителей' if clear else 'добавить в руководители'} ID {user} "
+                    f"сообщества {group}",
+                    name=self.name,
+                    tp=lg.level.debug if debug else lg.level.success,
                 )
-            if managers_count >= limit:
-                break
             counter += 1
-            passing_manager = False
 
-    def ban_check(self, group: int, banlist: list[int]):
+    def ban_check(self, group: int, ban_list: typing.List[int]):
         try:
             managers = self.get_all_community_members(
                 group=group,
@@ -413,11 +530,10 @@ class NNGFramework:
             )
             if managers is None:
                 return None
-            banned = [i for i in managers if i in banlist]
+            banned = [i for i in managers if i in ban_list]
             return banned
         except vk_api.exceptions.Captcha:
-            lg.log(self.name, "Пауза на 15 секунд", 2)
             sleep(15)
-            return self.ban_check(group, banlist)
+            return self.ban_check(group, ban_list)
         except self.exception_tuple as Error:
-            lg.log(self.name, f"Неизвестная ошибка: {Error}", 3)
+            lg.log(f"Произошла ошибка: {Error}", tp=lg.level.error, name=self.name)

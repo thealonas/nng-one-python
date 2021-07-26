@@ -5,11 +5,11 @@
     <p align="center">nng one</p>
 </p>
 
-[![License badge](https://img.shields.io/badge/license-EUPL-blue.svg)](LICENSE) [![Black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black) [![GitHub issues](https://img.shields.io/github/issues/likhner/nng-one)](https://github.com/likhner/nng-one/issues) [![DeepSource](https://deepsource.io/gh/likhner/nng-one.svg/?label=active+issues)](https://deepsource.io/gh/likhner/nng-one/?ref=repository-badge)
+[![License badge](https://img.shields.io/badge/license-EUPL-blue.svg)](LICENSE) [![Black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black) [![GitHub issues](https://img.shields.io/github/issues/likhner/nng-one)](https://github.com/likhner/nng-one/issues) [![DeepSource](https://deepsource.io/gh/likhner/nng-one.svg/?label=active+issues&token=TWgRpjBBHjQAeqWrSv5wikMA)](https://deepsource.io/gh/likhner/nng-one/?ref=repository-badge)
 
 # 🤔 Что это такое?
 
-Это скрпит позволяющий автоматизировать управление сообществами для комментирования записей ВКонтакте.
+Это скрипт позволяющий автоматизировать управление сообществами для комментирования записей ВКонтакте.
 
 <p align="center">
     <img src=".github/IMAGES/nng-one.png" width="550">
@@ -31,7 +31,10 @@
 3. Вывод статистики по сообществам (с учётом и без учёта заблокированных страниц)
     1. Общее количество подписчиков
     2. Общее количество редакторов
+    3. Общее количество подписчиков и редакторов без учёта заблокированных и дубликатов
+    4. Максимальное количество руководителей
 4. Выполнение некоторых действий без капчи
+5. Отключение [Callback API Бот](https://vk.com/cbbot) при массовых действиях
 
 # 📚 Ресурсы
 
